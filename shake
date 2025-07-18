@@ -1,0 +1,91 @@
+import os, site
+import numpy as np
+from moviepy.editor import *
+from PIL import Image
+
+# Setup for PIL + ImageMagick
+os.environ["IMAGEMAGICK_BINARY"] = r"C:\\Program Files\\ImageMagick-7.1.1-Q16-HDRI\\magick.exe"
+site.addsitedir(r"C:\\Users\\hp\\AppData\\Roaming\\Python\\Python313\\site-packages")
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
+
+# Constants
+INPUT_DIR = "input"
+OUTPUT_FILE = "output/final_output.mp4"
+VIDEO_WIDTH, VIDEO_HEIGHT = 1080, 1920
+IMAGE_DURATION = 1.8
+AMP = 40               # Increased shake amplitude
+FREQ = 2               # Moderate shake frequency
+OVERZOOM = 1.3         # More zoom to avoid black edges
+
+# Shake + Drop Animation
+def apply_shake_with_drop(image_clip, amp=AMP, freq=FREQ):
+    W, H = image_clip.size
+
+    def easing_envelope(t, total_duration):
+        fade_time = 0.4
+        if t < fade_time:
+            return t / fade_time
+        elif t > total_duration - fade_time:
+            return (total_duration - t) / fade_time
+        else:
+            return 1
+
+    def make_frame(t):
+        ease = easing_envelope(t, image_clip.duration)
+        dx = amp * np.sin(2 * np.pi * freq * t + np.pi / 4) * ease
+        dy = amp * np.cos(2 * np.pi * freq * t + np.pi / 3) * ease
+
+        # Drop effect
+        drop_duration = 0.5
+        if t < drop_duration:
+            p = t / drop_duration
+            drop_offset = (-VIDEO_HEIGHT) * (1 - (1 - p) ** 3)
+        else:
+            drop_offset = 0
+
+        dx, dy = int(dx), int(dy + drop_offset)
+
+        frame = image_clip.get_frame(t)
+        x_start = AMP + dx
+        y_start = AMP + dy
+        x_end = x_start + VIDEO_WIDTH
+        y_end = y_start + VIDEO_HEIGHT
+
+        return frame[y_start:y_end, x_start:x_end]
+
+    # Crop + pad before shake to eliminate black edge risk
+    padded_clip = image_clip.crop(
+        x_center=W // 2,
+        y_center=H // 2,
+        width=VIDEO_WIDTH + AMP * 2,
+        height=VIDEO_HEIGHT + AMP * 2
+    )
+
+    return VideoClip(make_frame=make_frame, duration=image_clip.duration).set_fps(30)
+
+# Load and Process Images
+image_clips = []
+for filename in sorted(os.listdir(INPUT_DIR)):
+    if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        path = os.path.join(INPUT_DIR, filename)
+        img = Image.open(path)
+        img_w, img_h = img.size
+
+        # More zoom to avoid edges
+        scale_w = (VIDEO_WIDTH * OVERZOOM) / img_w
+        scale_h = (VIDEO_HEIGHT * OVERZOOM) / img_h
+        scale = max(scale_w, scale_h)
+
+        img_clip = (
+            ImageClip(path)
+            .resize(scale)
+            .set_duration(IMAGE_DURATION)
+        )
+
+        final_clip = apply_shake_with_drop(img_clip)
+        image_clips.append(final_clip)
+
+# Final Concatenate
+final_video = concatenate_videoclips(image_clips, method="compose")
+final_video.write_videofile(OUTPUT_FILE, fps=30, preset="ultrafast")
